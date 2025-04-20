@@ -1,47 +1,32 @@
 package com.example.iris
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.view.View
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
-import android.provider.MediaStore
-import android.view.View
-import android.widget.ProgressBar
-import android.widget.Toast
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-//import com.example.bme_project.R
-//import com.example.bme_project.ml.DRModel3
-//import com.example.bme_project.ml.MEModel1
-//import com.example.iris.ml.DRModel3
-//import com.example.iris.ml.MEModel1
+import com.example.iris.ml.DRModel3
+import com.example.iris.ml.MEModel1
+import com.example.iris.R
 import org.tensorflow.lite.DataType
+import org.tensorflow.lite.support.common.ops.NormalizeOp
 import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.support.image.ops.ResizeOp
 import org.tensorflow.lite.support.image.ops.ResizeOp.ResizeMethod
 import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
-import org.tensorflow.lite.support.common.ops.NormalizeOp
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
-import org.tensorflow.lite.Interpreter
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-//import org.tensorflow.lite.support.common.TfLiteDelegate
-
-
+import java.util.Locale
 
 
 class MainActivity : AppCompatActivity() {
@@ -54,48 +39,9 @@ class MainActivity : AppCompatActivity() {
     lateinit var bitmap: Bitmap
     lateinit var MEPrediction: TextView
     lateinit var disclaimerText: TextView
-    private lateinit var loadingIndicator: ProgressBar
 
-    private var photoUri: Uri? = null // Add as class variable
-    private val REQUEST_PERMISSIONS = 200
-
-    private val pickMedia = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
-            try {
-                bitmap = contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }!!
-                imageView.setImageBitmap(bitmap)
-                placeholderText.visibility = View.GONE
-            } catch (e: Exception) {
-                Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    private val takePhoto = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success) {
-            val uri = photoUri // Capture photoUri in a local val
-            if (uri != null) {
-                try {
-                    bitmap = contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }!!
-                    imageView.setImageBitmap(bitmap)
-                    placeholderText.visibility = View.GONE
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                Toast.makeText(this, "Failed to capture image", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun createImageFile(): File {
-        val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
-        val storageDir: File = getExternalFilesDir(null)!!
-        return File.createTempFile(
-            "JPEG_${timeStamp}_",
-            ".jpg",
-            storageDir
-        )
-    }
+    private lateinit var currentPhotoPath: String
+    private var photoURI: Uri? = null
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,293 +50,160 @@ class MainActivity : AppCompatActivity() {
 
         selectBtn = findViewById(R.id.selectBtn)
         predictBtn = findViewById(R.id.predictBtn)
-        DRPrediction = findViewById(R.id.dRPrediction)
+        DRPrediction  = findViewById(R.id.dRPrediction)
         imageView = findViewById(R.id.imageView)
         placeholderText = findViewById(R.id.placeholderText)
-        MEPrediction = findViewById(R.id.mEPrediction)
+        MEPrediction  = findViewById(R.id.mEPrediction)
         disclaimerText = findViewById(R.id.disclaimerText)
 
-        val DRlabels = application.assets.open("DRLabels.txt").bufferedReader().readLines()
-        val MELabels = application.assets.open("MELabels.txt").bufferedReader().readLines()
 
-        loadingIndicator = findViewById(R.id.loadingIndicator)
+        val drLabels = application.assets.open("DRLabels.txt").bufferedReader().readLines()
+        val meLabels = application.assets.open("MELabels.txt").bufferedReader().readLines()
 
 
-        // Set up image processor for DR detection with resizing and normalization
-        val DRimageProcessor = ImageProcessor.Builder()
+        // Set up image processor with resizing and normalization
+        val drImageProcessor = ImageProcessor.Builder()
             .add(ResizeOp(512, 512, ResizeMethod.BILINEAR))
             .add(NormalizeOp(0.0f, 1.0f / 255.0f))  // Normalize image between 0 and 1
             .build()
 
-
-        // Set up image processor for ME detection with resizing and normalization
-        val MEimageProcessor = ImageProcessor.Builder()
+        val meImageProcessor = ImageProcessor.Builder()
             .add(ResizeOp(224, 224, ResizeMethod.BILINEAR))
             .add(NormalizeOp(0.0f, 1.0f / 255.0f))  // Normalize image between 0 and 1
             .build()
 
-
-
         // Open the image picker
         selectBtn.setOnClickListener {
-            requestPermissionsAndOpenPicker()
+            // Intent to open gallery (phone storage)
+            val pickIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*" // To select any image
+            }
+
+            // Intent to open the camera (to take a picture)
+            val takePhotoIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            // Create a file to save the full-resolution photo
+            var photoFile: File? = null
+            try {
+                photoFile = createImageFile()
+            } catch (ex: IOException) {
+                // Error occurred while creating the File
+                ex.printStackTrace()
+            }
+
+            // Continue only if the File was successfully created
+            photoFile?.also {
+                photoURI = FileProvider.getUriForFile(
+                    this,
+                    "com.example.iris.fileprovider",  // Must match provider authority in manifest
+                    it
+                )
+                takePhotoIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
+            }
+
+            // Create a chooser intent with both intents (gallery and camera)
+            val chooserIntent = Intent.createChooser(pickIntent, "Select or Take a New Picture")
+
+            // Add the camera intent as an additional option in the chooser
+            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(takePhotoIntent))
+
+            // Start the activity to allow the user to select an image or take a photo
+            startActivityForResult(chooserIntent, 100)
         }
 
         // Run prediction on selected image
         predictBtn.setOnClickListener {
-            if (!::bitmap.isInitialized) {
-                Toast.makeText(this, "Please select an image first", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
+            try {
+                // Load the bitmap into TensorImage
+                val tensorImage = TensorImage(DataType.FLOAT32)
+                tensorImage.load(bitmap)
+
+                // Process the image (resize and normalize)
+                val drProcessedImage = drImageProcessor.process(tensorImage)
+                // Prepare input tensor for model
+                val drInputFeature =
+                    TensorBuffer.createFixedSize(intArrayOf(1, 512, 512, 3), DataType.FLOAT32)
+                drInputFeature.loadBuffer(drProcessedImage.buffer)
+
+                // Process the image (resize and normalize)
+                val meProcessedImage = meImageProcessor.process(tensorImage)
+                // Prepare input tensor for model
+                val meInputFeature =
+                    TensorBuffer.createFixedSize(intArrayOf(1, 224, 224, 3), DataType.FLOAT32)
+                meInputFeature.loadBuffer(meProcessedImage.buffer)
+
+                // Load the model and run inference
+                val drModel = DRModel3.newInstance(this)
+                val outputs1 = drModel.process(drInputFeature)
+                // Get the output and find the class with the highest probability
+                val drOutputFeature = outputs1.outputFeature0AsTensorBuffer.floatArray
+                val maxIdx1 = drOutputFeature.indices.maxByOrNull { drOutputFeature[it] } ?: -1
+
+                val meModel = MEModel1.newInstance(this)
+                val outputs2 = meModel.process(meInputFeature)
+                val meOutputFeature = outputs2.outputFeature0AsTensorBuffer.floatArray
+                val maxIdx2 = meOutputFeature.indices.maxByOrNull { meOutputFeature[it] } ?: -1
+
+                // Set prediction text (class label)
+                DRPrediction.text = "Prediction: ${if (maxIdx1 >= 0) drLabels[maxIdx1] else "Unknown"}"
+                MEPrediction.text = "Prediction: ${if (maxIdx2 >= 0) meLabels[maxIdx2] else "Unknown"}"
+
+                disclaimerText.visibility = View.VISIBLE
+
+                // Close the model to release resources
+                drModel.close()
+                meModel.close()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
+        }
+    }
 
-            // Show loading indicator
-            loadingIndicator.visibility = View.VISIBLE
-            predictBtn.isEnabled = false  // Disable button during processing
+    @Throws(IOException::class)
+    private fun createImageFile(): File {
+        // Create an image file name
+        val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val storageDir: File = getExternalFilesDir(Environment.DIRECTORY_PICTURES)!!
+        return File.createTempFile(
+            "JPEG_${timeStamp}_", /* prefix */
+            ".jpg", /* suffix */
+            storageDir /* directory */
+        ).apply {
+            // Save a file: path for use with ACTION_VIEW intents
+            currentPhotoPath = absolutePath
+        }
+    }
 
-            // Create a copy of bitmap to avoid concurrent modification
-            val bitmapToProcess = bitmap.config?.let { it1 -> bitmap.copy(it1, true) }
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
 
-            // Create and start background thread
-            Thread {
+        if (requestCode == 100 && resultCode == RESULT_OK) {
+            // Case 1: Image from gallery
+            if (data?.data != null) {
+                val imageUri = data.data
+                bitmap = MediaStore.Images.Media.getBitmap(this.contentResolver, imageUri)
+                imageView.setImageBitmap(bitmap)
+                placeholderText.visibility = View.GONE
+            }
+            // Case 2: Full resolution image from camera
+            else if (photoURI != null) {
                 try {
-                    // Process first model (DR)
-                    val drResults = bitmapToProcess?.let { it1 -> processDRModel(it1) }
-
-                    // Process second model (ME)
-                    val meResults = bitmapToProcess?.let { it1 -> processMEModel(it1) }
-
-                    // Update UI on main thread
-                    runOnUiThread {
-                        // Update UI with results
-                        if (drResults != null) {
-                            DRPrediction.text = "Prediction: ${drResults.first}"
-                        }
-                        if (meResults != null) {
-                            MEPrediction.text = "Prediction: ${meResults.first}"
-                        }
-                        disclaimerText.visibility = View.VISIBLE
-
-                        // Hide loading indicator
-                        loadingIndicator.visibility = View.GONE
-                        predictBtn.isEnabled = true  // Re-enable button
-                    }
+                    bitmap = MediaStore.Images.Media.getBitmap(contentResolver, photoURI)
+                    imageView.setImageBitmap(bitmap)
+                    placeholderText.visibility = View.GONE
                 } catch (e: Exception) {
                     e.printStackTrace()
-
-                    // Update UI on main thread
-                    runOnUiThread {
-                        Toast.makeText(applicationContext, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-                        loadingIndicator.visibility = View.GONE
-                        predictBtn.isEnabled = true  // Re-enable button
-                    }
-                }
-            }.start()
-        }
-    }
-
-    private fun processDRModel(bitmap: Bitmap): Pair<String, Int> {
-        try {
-            // Create image processor
-            val imageProcessor = ImageProcessor.Builder()
-                .add(ResizeOp(512, 512, ResizeMethod.BILINEAR))
-                .add(NormalizeOp(0.0f, 1.0f / 255.0f))
-                .build()
-
-            // Load and process image
-            val tensorImage = TensorImage(DataType.FLOAT32)
-            tensorImage.load(bitmap)
-            val processedImage = imageProcessor.process(tensorImage)
-
-            // Create input tensor
-            val inputBuffer = processedImage.buffer
-
-            // Create interpreter options
-            val options = Interpreter.Options().apply {
-                setNumThreads(2)
-                setUseNNAPI(false) // Disable Neural Network API for better compatibility
-//                addDelegate(TfLiteDelegate())
-
-            }
-
-            // Load model file directly
-            val modelBuffer = ByteBuffer.allocateDirect(application.assets.open("DRModel3.tflite").readBytes().size)
-            modelBuffer.put(application.assets.open("DRModel3.tflite").readBytes())
-            modelBuffer.rewind()
-
-            // Create interpreter
-            val interpreter = Interpreter(modelBuffer, options)
-
-            // Prepare output buffer (adjust the size according to your model output)
-            val outputBuffer = ByteBuffer.allocateDirect(4 * 5) // Assuming 5 classes, float32 (4 bytes each)
-            outputBuffer.order(ByteOrder.nativeOrder())
-
-            // Run inference
-            interpreter.run(inputBuffer, outputBuffer)
-
-            // Process output
-            outputBuffer.rewind()
-            val outputs = FloatArray(5) // Adjust size based on your model output
-            for (i in outputs.indices) {
-                outputs[i] = outputBuffer.float
-            }
-
-            // Find max index
-            val maxIdx = outputs.indices.maxByOrNull { outputs[it] } ?: -1
-
-            // Get label
-            val labels = application.assets.open("DRLabels.txt").bufferedReader().readLines()
-            val result = if (maxIdx >= 0) labels[maxIdx] else "Unknown"
-
-            // Close interpreter
-            interpreter.close()
-
-            return Pair(result, maxIdx)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return Pair("Error: ${e.message}", -1)
-        }
-    }
-
-    private fun processMEModel(bitmap: Bitmap): Pair<String, Int> {
-        try {
-            // Create image processor
-            val imageProcessor = ImageProcessor.Builder()
-                .add(ResizeOp(224, 224, ResizeMethod.BILINEAR))
-                .add(NormalizeOp(0.0f, 1.0f / 255.0f))
-                .build()
-
-            // Load and process image
-            val tensorImage = TensorImage(DataType.FLOAT32)
-            tensorImage.load(bitmap)
-            val processedImage = imageProcessor.process(tensorImage)
-
-            // Create input tensor
-            val inputBuffer = processedImage.buffer
-
-            // Create interpreter options
-            val options = Interpreter.Options().apply {
-                setNumThreads(2)
-                setUseNNAPI(false) // Disable Neural Network API for better compatibility
-//                addDelegate(TfLiteDelegate())
-
-            }
-
-            // Load model file directly
-            val modelBuffer = ByteBuffer.allocateDirect(application.assets.open("MEModel1.tflite").readBytes().size)
-            modelBuffer.put(application.assets.open("MEModel1.tflite").readBytes())
-            modelBuffer.rewind()
-
-            // Create interpreter
-            val interpreter = Interpreter(modelBuffer, options)
-
-            // Prepare output buffer (adjust the size according to your model output)
-            val outputBuffer = ByteBuffer.allocateDirect(4 * 2) // Assuming 5 classes, float32 (4 bytes each)
-            outputBuffer.order(ByteOrder.nativeOrder())
-
-            // Run inference
-            interpreter.run(inputBuffer, outputBuffer)
-
-            // Process output
-            outputBuffer.rewind()
-            val outputs = FloatArray(2) // Adjust size based on your model output
-            for (i in outputs.indices) {
-                outputs[i] = outputBuffer.float
-            }
-
-            // Find max index
-            val maxIdx = outputs.indices.maxByOrNull { outputs[it] } ?: -1
-
-            // Get label
-            val labels = application.assets.open("MELabels.txt").bufferedReader().readLines()
-            val result = if (maxIdx >= 0) labels[maxIdx] else "Unknown"
-
-            // Close interpreter
-            interpreter.close()
-
-            return Pair(result, maxIdx)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return Pair("Error: ${e.message}", -1)
-        }
-    }
-
-    private fun requestPermissionsAndOpenPicker() {
-        val permissions = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            permissions.add(Manifest.permission.CAMERA)
-        }
-        // Only request READ_MEDIA_IMAGES if needed for custom gallery picker (not needed for Photo Picker)
-        if (permissions.isEmpty()) {
-            openImagePicker()
-        } else {
-            ActivityCompat.requestPermissions(this, permissions.toTypedArray(), REQUEST_PERMISSIONS)
-        }
-    }
-
-
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_PERMISSIONS && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            openImagePicker()
-        } else {
-            Toast.makeText(this, "Camera permission is required", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun openImagePicker() {
-        val options = arrayOf("Take Photo", "Select from Gallery")
-        AlertDialog.Builder(this)
-            .setTitle("Choose Image Source")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> { // Take Photo
-                        val photoFile: File? = createImageFile()
-                        if (photoFile != null) {
-                            val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", photoFile)
-                            photoUri = uri // Set photoUri for later use
-                            takePhoto.launch(uri)
-                        } else {
-                            Toast.makeText(this, "Failed to create image file", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    1 -> { // Select from Gallery
-                        pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    }
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+            // Case 3: Fallback for thumbnail from camera (just in case)
+            else if (data?.extras != null) {
+                val cameraBitmap = data.extras?.get("data") as? Bitmap
+                cameraBitmap?.let {
+                    bitmap = it
+                    imageView.setImageBitmap(bitmap)
+                    placeholderText.visibility = View.GONE
+                }
+            }
+        }
     }
-
-
-
-
-//    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-//        super.onActivityResult(requestCode, resultCode, data)
-//
-//        if (requestCode == 100 && resultCode == RESULT_OK) {
-//            when {
-//                data?.data != null -> {
-//                    val imageUri = data.data
-//                    bitmap = MediaStore.Images.Media.getBitmap(this.contentResolver, imageUri!!)
-//                    imageView.setImageBitmap(bitmap)
-//                    placeholderText.visibility = View.GONE
-//                }
-//                photoUri != null -> {
-//                    bitmap = MediaStore.Images.Media.getBitmap(this.contentResolver, photoUri!!)
-//                    imageView.setImageBitmap(bitmap)
-//                    placeholderText.visibility = View.GONE
-//                }
-//            }
-//        }
-////    companion object {
-////        // Define the pic id
-////        private const val pic_id = 123
-////    }
-//    }
 }
+
