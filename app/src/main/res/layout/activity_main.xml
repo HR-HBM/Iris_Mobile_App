@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="20dp"
+        android:id="@+id/imageContainer">
+
+        <!-- ImageView -->
+        <ImageView
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            app:layout_constraintDimensionRatio="1:1"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:background="#ffffff"
+            android:id="@+id/imageView"/>
+
+        <!-- Placeholder Text -->
+        <TextView
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:id="@+id/placeholderText"
+            android:text="Please load an image to make a prediction"
+            android:textColor="#000"
+            android:textAlignment="center"
+            android:textSize="20dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:visibility="visible"/>
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+
+
+
+
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/linLayout"
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="10dp"
+        android:layout_below="@+id/imageContainer">
+        <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="20dp"
+            android:text="Select Image"
+            android:id="@+id/selectBtn"/>
+        <Button
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Predict Image"
+            android:id="@+id/predictBtn"/>
+
+    </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/dRPrediction"
+        android:layout_marginLeft="10dp"
+        android:text="Diabetic Retinopathy: "
+        android:layout_marginTop="10dp"
+        android:textSize="20dp"
+        android:layout_below="@+id/linLayout"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/mEPrediction"
+        android:layout_marginLeft="10dp"
+        android:layout_marginTop="70dp"
+        android:text="Diabetic Macula Edema:"
+        android:textSize="20dp"
+        android:layout_below="@+id/linLayout"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:id="@+id/disclaimerText"
+        android:text="The Diagnosis provided by this system is subject to varying accuracy. It is advisable to consult an ophthalmologist to confirm diagnosis results and begin treatment in a timely manner."
+        android:textColor="#000"
+        android:textAlignment="center"
+        android:layout_marginTop="150dp"
+        android:textSize="20dp"
+        android:visibility="invisible"
+        android:layout_below="@+id/linLayout"/>
+
+    <ProgressBar
+        android:id="@+id/loadingIndicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_centerInParent="true"
+        android:visibility="gone" />
+
+
+
+
+
+</RelativeLayout>
