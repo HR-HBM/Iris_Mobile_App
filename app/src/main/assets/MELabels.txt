@@ -1,2 +1,2 @@
-Macula Negative
-Macula Positive
+Negative
+Positive

@@ -25,8 +25,40 @@ import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+
+// Data class for DR diagnosis details
+data class DRDiagnosis(
+    val severity: String,
+    val symptoms: String
+)
+
+// Data class for ME diagnosis details
+data class MEDiagnosis(
+    val status: String, // "Positive" or "Negative"
+    val features: String
+)
+
+// Define DR diagnosis list
+val drDiagnosisList = listOf(
+    DRDiagnosis(severity = "ICDR level 0", symptoms = "No diabetic retinopathy: No visible abnormalities in the retina."),
+    DRDiagnosis(severity = "ICDR level 1", symptoms = "Mild NPDR: Few microaneurysms visible in the retina."),
+    DRDiagnosis(severity = "ICDR level 2", symptoms = "Moderate NPDR: Increased microaneurysms, hemorrhages, and exudates; possible venous beading."),
+    DRDiagnosis(severity = "ICDR level 3", symptoms = "Severe NPDR: Extensive hemorrhages, microaneurysms, and venous beading in multiple quadrants."),
+    DRDiagnosis(severity = "ICDR level 4", symptoms = "PDR: Neovascularization and/or vitreous hemorrhage; severe retinal damage.")
+)
+
+// Define ME diagnosis list
+val meDiagnosisList = listOf(
+    MEDiagnosis(status = "Negative", features = "No hard exudates or swelling in the macula region."),
+    MEDiagnosis(status = "Positive", features = "Hard exudates and/or macular edema present near the macula.")
+)
+
+
+
 
 
 class MainActivity : AppCompatActivity() {
@@ -39,6 +71,10 @@ class MainActivity : AppCompatActivity() {
     lateinit var bitmap: Bitmap
     lateinit var MEPrediction: TextView
     lateinit var disclaimerText: TextView
+    lateinit var drDiagnosis: TextView
+    lateinit var meDiagnosis: TextView
+    lateinit var fileNameText: TextView
+
 
     private lateinit var currentPhotoPath: String
     private var photoURI: Uri? = null
@@ -46,6 +82,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = android.graphics.Color.parseColor("#40a6a6") // Set status bar color
         setContentView(R.layout.activity_main)
 
         selectBtn = findViewById(R.id.selectBtn)
@@ -55,10 +92,24 @@ class MainActivity : AppCompatActivity() {
         placeholderText = findViewById(R.id.placeholderText)
         MEPrediction  = findViewById(R.id.mEPrediction)
         disclaimerText = findViewById(R.id.disclaimerText)
+        drDiagnosis = findViewById(R.id.drDiagnosis)
+        meDiagnosis = findViewById(R.id.meDiagnosis)
+        fileNameText = findViewById(R.id.fileNameText)
+
+
+
 
 
         val drLabels = application.assets.open("DRLabels.txt").bufferedReader().readLines()
         val meLabels = application.assets.open("MELabels.txt").bufferedReader().readLines()
+
+        // Set dynamic footer text
+        val appName = getString(R.string.app_name)
+        val footerTextView = findViewById<TextView>(R.id.footerText)
+        val currentYear = Calendar.getInstance().get(Calendar.YEAR)
+        val footerText = getString(R.string.footer_text, appName, currentYear)
+        footerTextView.text = footerText
+
 
 
         // Set up image processor with resizing and normalization
@@ -144,8 +195,18 @@ class MainActivity : AppCompatActivity() {
                 val maxIdx2 = meOutputFeature.indices.maxByOrNull { meOutputFeature[it] } ?: -1
 
                 // Set prediction text (class label)
-                DRPrediction.text = "Prediction: ${if (maxIdx1 >= 0) drLabels[maxIdx1] else "Unknown"}"
-                MEPrediction.text = "Prediction: ${if (maxIdx2 >= 0) meLabels[maxIdx2] else "Unknown"}"
+                DRPrediction.text = "Diabetic Retinopathy: ${if (maxIdx1 >= 0) drLabels[maxIdx1] else "Unknown"}"
+                MEPrediction.text = "Diabetic Macula Edema: ${if (maxIdx2 >= 0) meLabels[maxIdx2] else "Unknown"}"
+                // Update diagnosis details based on predictions
+                // For DR, maxIdx1 directly maps to severity (0-4)
+                val drDiagnosisDetail = drDiagnosisList.find { it.severity == drLabels[maxIdx1] }?.symptoms ?: "Unknown severity level"
+                drDiagnosis.text = "•Diagnosis: $drDiagnosisDetail"
+
+                // For ME, maxIdx2 maps to status (0 for Negative, 1 for Positive based on MELabels.txt)
+//                val meStatus = if (maxIdx2 >= 0) meLabels[maxIdx2] else "Unknown"
+                val meDiagnosisDetail = meDiagnosisList.find { it.status == meLabels[maxIdx2] }?.features ?: "Unknown status"
+                meDiagnosis.text = "•Diagnosis: $meDiagnosisDetail"
+
 
                 disclaimerText.visibility = View.VISIBLE
 
@@ -177,12 +238,23 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
 
         if (requestCode == 100 && resultCode == RESULT_OK) {
+            var fileName = "Unknown"
             // Case 1: Image from gallery
             if (data?.data != null) {
                 val imageUri = data.data
                 bitmap = MediaStore.Images.Media.getBitmap(this.contentResolver, imageUri)
                 imageView.setImageBitmap(bitmap)
                 placeholderText.visibility = View.GONE
+                // Extract file name from Uri
+                val cursor = contentResolver.query(imageUri!!, null, null, null, null)
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                        if (nameIndex != -1) {
+                            fileName = it.getString(nameIndex)
+                        }
+                    }
+                }
             }
             // Case 2: Full resolution image from camera
             else if (photoURI != null) {
@@ -190,6 +262,8 @@ class MainActivity : AppCompatActivity() {
                     bitmap = MediaStore.Images.Media.getBitmap(contentResolver, photoURI)
                     imageView.setImageBitmap(bitmap)
                     placeholderText.visibility = View.GONE
+                    // Extract file name from currentPhotoPath
+                    fileName = File(currentPhotoPath).name
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -201,8 +275,12 @@ class MainActivity : AppCompatActivity() {
                     bitmap = it
                     imageView.setImageBitmap(bitmap)
                     placeholderText.visibility = View.GONE
+                    fileName = "Camera_Thumbnail_${System.currentTimeMillis()}.jpg"
                 }
             }
+            // Display the file name
+            fileNameText.text = "File Name: $fileName"
+            fileNameText.visibility = View.VISIBLE
         }
     }
 }
