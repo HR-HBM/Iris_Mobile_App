@@ -6,15 +6,18 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
-import com.example.iris.ml.DRModel3
-import com.example.iris.ml.MEModel1
+//import com.example.iris.ml.MEModel1
 import com.example.iris.R
+import com.example.iris.ml.BestDrModel
+import com.example.iris.ml.BestMeModel
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.support.common.ops.NormalizeOp
 import org.tensorflow.lite.support.image.ImageProcessor
@@ -96,6 +99,9 @@ class MainActivity : AppCompatActivity() {
         meDiagnosis = findViewById(R.id.meDiagnosis)
         fileNameText = findViewById(R.id.fileNameText)
 
+        Log.e("ButtonSetup", "Predict button initialized: ${predictBtn != null}")
+
+
 
 
 
@@ -114,12 +120,12 @@ class MainActivity : AppCompatActivity() {
 
         // Set up image processor with resizing and normalization
         val drImageProcessor = ImageProcessor.Builder()
-            .add(ResizeOp(512, 512, ResizeMethod.BILINEAR))
+            .add(ResizeOp(300, 300, ResizeMethod.BILINEAR))
             .add(NormalizeOp(0.0f, 1.0f / 255.0f))  // Normalize image between 0 and 1
             .build()
 
         val meImageProcessor = ImageProcessor.Builder()
-            .add(ResizeOp(224, 224, ResizeMethod.BILINEAR))
+            .add(ResizeOp(300, 300, ResizeMethod.BILINEAR))
             .add(NormalizeOp(0.0f, 1.0f / 255.0f))  // Normalize image between 0 and 1
             .build()
 
@@ -163,36 +169,60 @@ class MainActivity : AppCompatActivity() {
 
         // Run prediction on selected image
         predictBtn.setOnClickListener {
+            Log.e("ButtonClick", "Predict button clicked - THIS SHOULD APPEAR")
+
             try {
+                Log.d("PredictFlow", "Starting prediction process") // Check if prediction starts
+
                 // Load the bitmap into TensorImage
                 val tensorImage = TensorImage(DataType.FLOAT32)
+                Log.d("PredictFlow", "Created TensorImage")
+
                 tensorImage.load(bitmap)
+                Log.d("PredictFlow", "Loaded bitmap to TensorImage")
+
 
                 // Process the image (resize and normalize)
                 val drProcessedImage = drImageProcessor.process(tensorImage)
+                Log.d("PredictFlow", "Processed DR image")
+
                 // Prepare input tensor for model
                 val drInputFeature =
-                    TensorBuffer.createFixedSize(intArrayOf(1, 512, 512, 3), DataType.FLOAT32)
+                    TensorBuffer.createFixedSize(intArrayOf(1, 300, 300, 3), DataType.FLOAT32)
                 drInputFeature.loadBuffer(drProcessedImage.buffer)
 
                 // Process the image (resize and normalize)
                 val meProcessedImage = meImageProcessor.process(tensorImage)
+                Log.d("PredictFlow", "Processed ME image")
+
                 // Prepare input tensor for model
                 val meInputFeature =
-                    TensorBuffer.createFixedSize(intArrayOf(1, 224, 224, 3), DataType.FLOAT32)
+                    TensorBuffer.createFixedSize(intArrayOf(1, 300, 300, 3), DataType.FLOAT32)
                 meInputFeature.loadBuffer(meProcessedImage.buffer)
+                Log.d("PredictFlow", "Prepared ME input feature")
+
 
                 // Load the model and run inference
-                val drModel = DRModel3.newInstance(this)
+                val drModel = BestDrModel.newInstance(this)
                 val outputs1 = drModel.process(drInputFeature)
                 // Get the output and find the class with the highest probability
                 val drOutputFeature = outputs1.outputFeature0AsTensorBuffer.floatArray
                 val maxIdx1 = drOutputFeature.indices.maxByOrNull { drOutputFeature[it] } ?: -1
 
-                val meModel = MEModel1.newInstance(this)
+                val meModel = BestMeModel.newInstance(this)
+                Log.d("PredictFlow", "Created ME model instance")
+
                 val outputs2 = meModel.process(meInputFeature)
+                Log.d("PredictFlow", "Got ME model outputs")
+
                 val meOutputFeature = outputs2.outputFeature0AsTensorBuffer.floatArray
-                val maxIdx2 = meOutputFeature.indices.maxByOrNull { meOutputFeature[it] } ?: -1
+                Log.d("ModelOutput", "ME raw outputs: ${meOutputFeature.contentToString()}")
+
+// ME model outputs a single float (sigmoid output)
+                val mePredictionScore = meOutputFeature[0]  // Just one output
+                val maxIdx2 = if (mePredictionScore > 0.5) 1 else 0  // 1 = Positive, 0 = Negative
+                Log.d("ModelOutput", "ME predicted class: $maxIdx2 with value: ${meOutputFeature[maxIdx2]}")
+
 
                 // Set prediction text (class label)
                 DRPrediction.text = "Diabetic Retinopathy: ${if (maxIdx1 >= 0) drLabels[maxIdx1] else "Unknown"}"
@@ -214,7 +244,8 @@ class MainActivity : AppCompatActivity() {
                 drModel.close()
                 meModel.close()
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("PredictionError", "Error during prediction", e)
+                Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
