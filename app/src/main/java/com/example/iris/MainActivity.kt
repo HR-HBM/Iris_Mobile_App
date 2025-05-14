@@ -3,35 +3,31 @@ package com.example.iris
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.AsyncTask
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import android.view.View
-import android.widget.Button
-import android.widget.ImageView
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
-//import com.example.iris.ml.MEModel1
-import com.example.iris.R
-import com.example.iris.ml.BestDrModel
-import com.example.iris.ml.BestMeModel
-import org.tensorflow.lite.DataType
-import org.tensorflow.lite.support.common.ops.NormalizeOp
-import org.tensorflow.lite.support.image.ImageProcessor
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.image.ops.ResizeOp
-import org.tensorflow.lite.support.image.ops.ResizeOp.ResizeMethod
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-
+import java.util.*
+import java.util.concurrent.TimeUnit
 
 // Data class for DR diagnosis details
 data class DRDiagnosis(
@@ -56,13 +52,9 @@ val drDiagnosisList = listOf(
 
 // Define ME diagnosis list
 val meDiagnosisList = listOf(
-    MEDiagnosis(status = "Negative", features = "No hard exudates or swelling in the macula region."),
-    MEDiagnosis(status = "Positive", features = "Hard exudates and/or macular edema present near the macula.")
+    MEDiagnosis(status = "DME Negative", features = "No hard exudates or swelling in the macula region."),
+    MEDiagnosis(status = "DME Positive", features = "Hard exudates and/or macular edema present near the macula.")
 )
-
-
-
-
 
 class MainActivity : AppCompatActivity() {
 
@@ -71,183 +63,128 @@ class MainActivity : AppCompatActivity() {
     lateinit var DRPrediction: TextView
     lateinit var imageView: ImageView
     lateinit var placeholderText: TextView
-    lateinit var bitmap: Bitmap
     lateinit var MEPrediction: TextView
     lateinit var disclaimerText: TextView
     lateinit var drDiagnosis: TextView
     lateinit var meDiagnosis: TextView
     lateinit var fileNameText: TextView
-
+    lateinit var loadingIndicator: ProgressBar
 
     private lateinit var currentPhotoPath: String
     private var photoURI: Uri? = null
+    private var currentBitmap: Bitmap? = null
 
+    // Retrofit setup with increased timeouts
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .protocols(listOf(Protocol.HTTP_1_1)) // Force HTTP/1.1 to avoid HTTP/2 issues
+        .build()
+
+    private val retrofit = Retrofit.Builder()
+        .baseUrl("https://retina-api-production.up.railway.app")
+        .client(client)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+
+    private val apiService = retrofit.create(ApiService::class.java)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = android.graphics.Color.parseColor("#40a6a6") // Set status bar color
         setContentView(R.layout.activity_main)
 
+        // Initialize UI components
+        initializeUIComponents()
+
+        // Set dynamic footer text
+        setupFooterText()
+
+        // Open the image picker
+        selectBtn.setOnClickListener {
+            resetPredictionTexts()
+            openImagePicker()
+        }
+
+        // Run prediction via API
+        predictBtn.setOnClickListener {
+            if (currentBitmap == null) {
+                Toast.makeText(this, "Please select an image first", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // Start image upload in background
+            ImagePredictionTask().execute(currentBitmap)
+        }
+    }
+
+    private fun initializeUIComponents() {
         selectBtn = findViewById(R.id.selectBtn)
         predictBtn = findViewById(R.id.predictBtn)
-        DRPrediction  = findViewById(R.id.dRPrediction)
+        DRPrediction = findViewById(R.id.dRPrediction)
         imageView = findViewById(R.id.imageView)
         placeholderText = findViewById(R.id.placeholderText)
-        MEPrediction  = findViewById(R.id.mEPrediction)
+        MEPrediction = findViewById(R.id.mEPrediction)
         disclaimerText = findViewById(R.id.disclaimerText)
         drDiagnosis = findViewById(R.id.drDiagnosis)
         meDiagnosis = findViewById(R.id.meDiagnosis)
         fileNameText = findViewById(R.id.fileNameText)
+        loadingIndicator = findViewById((R.id.loadingIndicator))
 
-        Log.e("ButtonSetup", "Predict button initialized: ${predictBtn != null}")
+        Log.d("ButtonSetup", "Predict button initialized: ${predictBtn != null}")
+    }
 
-
-
-
-
-
-        val drLabels = application.assets.open("DRLabels.txt").bufferedReader().readLines()
-        val meLabels = application.assets.open("MELabels.txt").bufferedReader().readLines()
-
-        // Set dynamic footer text
+    private fun setupFooterText() {
         val appName = getString(R.string.app_name)
         val footerTextView = findViewById<TextView>(R.id.footerText)
         val currentYear = Calendar.getInstance().get(Calendar.YEAR)
         val footerText = getString(R.string.footer_text, appName, currentYear)
         footerTextView.text = footerText
+    }
 
+    private fun resetPredictionTexts() {
+        DRPrediction.text = "Diabetic Retinopathy: "
+        MEPrediction.text = "Diabetic Macula Edema: "
+        drDiagnosis.text = "•Diagnosis: "
+        meDiagnosis.text = "•Diagnosis: "
+    }
 
-
-        // Set up image processor with resizing and normalization
-        val drImageProcessor = ImageProcessor.Builder()
-            .add(ResizeOp(300, 300, ResizeMethod.BILINEAR))
-            .add(NormalizeOp(0.0f, 1.0f / 255.0f))  // Normalize image between 0 and 1
-            .build()
-
-        val meImageProcessor = ImageProcessor.Builder()
-            .add(ResizeOp(300, 300, ResizeMethod.BILINEAR))
-            .add(NormalizeOp(0.0f, 1.0f / 255.0f))  // Normalize image between 0 and 1
-            .build()
-
-        // Open the image picker
-        selectBtn.setOnClickListener {
-            // Intent to open gallery (phone storage)
-            val pickIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                type = "image/*" // To select any image
-            }
-
-            // Intent to open the camera (to take a picture)
-            val takePhotoIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            // Create a file to save the full-resolution photo
-            var photoFile: File? = null
-            try {
-                photoFile = createImageFile()
-            } catch (ex: IOException) {
-                // Error occurred while creating the File
-                ex.printStackTrace()
-            }
-
-            // Continue only if the File was successfully created
-            photoFile?.also {
-                photoURI = FileProvider.getUriForFile(
-                    this,
-                    "com.example.iris.fileprovider",  // Must match provider authority in manifest
-                    it
-                )
-                takePhotoIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
-            }
-
-            // Create a chooser intent with both intents (gallery and camera)
-            val chooserIntent = Intent.createChooser(pickIntent, "Select or Take a New Picture")
-
-            // Add the camera intent as an additional option in the chooser
-            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(takePhotoIntent))
-
-            // Start the activity to allow the user to select an image or take a photo
-            startActivityForResult(chooserIntent, 100)
+    private fun openImagePicker() {
+        // Intent to open gallery (phone storage)
+        val pickIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*" // To select any image
         }
 
-        // Run prediction on selected image
-        predictBtn.setOnClickListener {
-            Log.e("ButtonClick", "Predict button clicked - THIS SHOULD APPEAR")
-
-            try {
-                Log.d("PredictFlow", "Starting prediction process") // Check if prediction starts
-
-                // Load the bitmap into TensorImage
-                val tensorImage = TensorImage(DataType.FLOAT32)
-                Log.d("PredictFlow", "Created TensorImage")
-
-                tensorImage.load(bitmap)
-                Log.d("PredictFlow", "Loaded bitmap to TensorImage")
-
-
-                // Process the image (resize and normalize)
-                val drProcessedImage = drImageProcessor.process(tensorImage)
-                Log.d("PredictFlow", "Processed DR image")
-
-                // Prepare input tensor for model
-                val drInputFeature =
-                    TensorBuffer.createFixedSize(intArrayOf(1, 300, 300, 3), DataType.FLOAT32)
-                drInputFeature.loadBuffer(drProcessedImage.buffer)
-
-                // Process the image (resize and normalize)
-                val meProcessedImage = meImageProcessor.process(tensorImage)
-                Log.d("PredictFlow", "Processed ME image")
-
-                // Prepare input tensor for model
-                val meInputFeature =
-                    TensorBuffer.createFixedSize(intArrayOf(1, 300, 300, 3), DataType.FLOAT32)
-                meInputFeature.loadBuffer(meProcessedImage.buffer)
-                Log.d("PredictFlow", "Prepared ME input feature")
-
-
-                // Load the model and run inference
-                val drModel = BestDrModel.newInstance(this)
-                val outputs1 = drModel.process(drInputFeature)
-                // Get the output and find the class with the highest probability
-                val drOutputFeature = outputs1.outputFeature0AsTensorBuffer.floatArray
-                val maxIdx1 = drOutputFeature.indices.maxByOrNull { drOutputFeature[it] } ?: -1
-
-                val meModel = BestMeModel.newInstance(this)
-                Log.d("PredictFlow", "Created ME model instance")
-
-                val outputs2 = meModel.process(meInputFeature)
-                Log.d("PredictFlow", "Got ME model outputs")
-
-                val meOutputFeature = outputs2.outputFeature0AsTensorBuffer.floatArray
-                Log.d("ModelOutput", "ME raw outputs: ${meOutputFeature.contentToString()}")
-
-// ME model outputs a single float (sigmoid output)
-                val mePredictionScore = meOutputFeature[0]  // Just one output
-                val maxIdx2 = if (mePredictionScore > 0.5) 1 else 0  // 1 = Positive, 0 = Negative
-                Log.d("ModelOutput", "ME predicted class: $maxIdx2 with value: ${meOutputFeature[maxIdx2]}")
-
-
-                // Set prediction text (class label)
-                DRPrediction.text = "Diabetic Retinopathy: ${if (maxIdx1 >= 0) drLabels[maxIdx1] else "Unknown"}"
-                MEPrediction.text = "Diabetic Macula Edema: ${if (maxIdx2 >= 0) meLabels[maxIdx2] else "Unknown"}"
-                // Update diagnosis details based on predictions
-                // For DR, maxIdx1 directly maps to severity (0-4)
-                val drDiagnosisDetail = drDiagnosisList.find { it.severity == drLabels[maxIdx1] }?.symptoms ?: "Unknown severity level"
-                drDiagnosis.text = "•Diagnosis: $drDiagnosisDetail"
-
-                // For ME, maxIdx2 maps to status (0 for Negative, 1 for Positive based on MELabels.txt)
-//                val meStatus = if (maxIdx2 >= 0) meLabels[maxIdx2] else "Unknown"
-                val meDiagnosisDetail = meDiagnosisList.find { it.status == meLabels[maxIdx2] }?.features ?: "Unknown status"
-                meDiagnosis.text = "•Diagnosis: $meDiagnosisDetail"
-
-
-                disclaimerText.visibility = View.VISIBLE
-
-                // Close the model to release resources
-                drModel.close()
-                meModel.close()
-            } catch (e: Exception) {
-                Log.e("PredictionError", "Error during prediction", e)
-                Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+        // Intent to open the camera (to take a picture)
+        val takePhotoIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        // Create a file to save the full-resolution photo
+        var photoFile: File? = null
+        try {
+            photoFile = createImageFile()
+        } catch (ex: IOException) {
+            // Error occurred while creating the File
+            ex.printStackTrace()
         }
+
+        // Continue only if the File was successfully created
+        photoFile?.also {
+            photoURI = FileProvider.getUriForFile(
+                this,
+                "com.example.iris.fileprovider",  // Must match provider authority in manifest
+                it
+            )
+            takePhotoIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
+        }
+
+        // Create a chooser intent with both intents (gallery and camera)
+        val chooserIntent = Intent.createChooser(pickIntent, "Select or Take a New Picture")
+
+        // Add the camera intent as an additional option in the chooser
+        chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(takePhotoIntent))
+
+        // Start the activity to allow the user to select an image or take a photo
+        startActivityForResult(chooserIntent, 100)
     }
 
     @Throws(IOException::class)
@@ -270,49 +207,175 @@ class MainActivity : AppCompatActivity() {
 
         if (requestCode == 100 && resultCode == RESULT_OK) {
             var fileName = "Unknown"
-            // Case 1: Image from gallery
-            if (data?.data != null) {
-                val imageUri = data.data
-                bitmap = MediaStore.Images.Media.getBitmap(this.contentResolver, imageUri)
-                imageView.setImageBitmap(bitmap)
-                placeholderText.visibility = View.GONE
-                // Extract file name from Uri
-                val cursor = contentResolver.query(imageUri!!, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val nameIndex = it.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
-                        if (nameIndex != -1) {
-                            fileName = it.getString(nameIndex)
+
+            try {
+                // Clean up previous bitmap to free memory
+                if (currentBitmap != null && !currentBitmap!!.isRecycled) {
+                    currentBitmap!!.recycle()
+                    currentBitmap = null
+                }
+
+                // Case 1: Image from gallery
+                if (data?.data != null) {
+                    val imageUri = data.data
+                    currentBitmap = MediaStore.Images.Media.getBitmap(this.contentResolver, imageUri)
+                    imageView.setImageBitmap(currentBitmap)
+                    placeholderText.visibility = View.GONE
+                    // Extract file name from Uri
+                    val cursor = contentResolver.query(imageUri!!, null, null, null, null)
+                    cursor?.use {
+                        if (it.moveToFirst()) {
+                            val nameIndex = it.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
+                            if (nameIndex != -1) {
+                                fileName = it.getString(nameIndex)
+                            }
                         }
                     }
                 }
-            }
-            // Case 2: Full resolution image from camera
-            else if (photoURI != null) {
-                try {
-                    bitmap = MediaStore.Images.Media.getBitmap(contentResolver, photoURI)
-                    imageView.setImageBitmap(bitmap)
-                    placeholderText.visibility = View.GONE
-                    // Extract file name from currentPhotoPath
-                    fileName = File(currentPhotoPath).name
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                // Case 2: Full resolution image from camera
+                else if (photoURI != null) {
+                    try {
+                        currentBitmap = MediaStore.Images.Media.getBitmap(contentResolver, photoURI)
+                        imageView.setImageBitmap(currentBitmap)
+                        placeholderText.visibility = View.GONE
+                        // Extract file name from currentPhotoPath
+                        fileName = File(currentPhotoPath).name
+                    } catch (e: Exception) {
+                        Log.e("ImageError", "Error loading camera image", e)
+                        Toast.makeText(this, "Error loading image: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
                 }
-            }
-            // Case 3: Fallback for thumbnail from camera (just in case)
-            else if (data?.extras != null) {
-                val cameraBitmap = data.extras?.get("data") as? Bitmap
-                cameraBitmap?.let {
-                    bitmap = it
-                    imageView.setImageBitmap(bitmap)
-                    placeholderText.visibility = View.GONE
-                    fileName = "Camera_Thumbnail_${System.currentTimeMillis()}.jpg"
+                // Case 3: Fallback for thumbnail from camera (just in case)
+                else if (data?.extras != null) {
+                    val cameraBitmap = data.extras?.get("data") as? Bitmap
+                    cameraBitmap?.let {
+                        currentBitmap = it
+                        imageView.setImageBitmap(currentBitmap)
+                        placeholderText.visibility = View.GONE
+                        fileName = "Camera_Thumbnail_${System.currentTimeMillis()}.jpg"
+                    }
                 }
+
+                // Display the file name
+                fileNameText.text = "File Name: $fileName"
+                fileNameText.visibility = View.VISIBLE
+            } catch (e: OutOfMemoryError) {
+                Log.e("MemoryError", "Out of memory while loading image", e)
+                Toast.makeText(this, "Image too large to load. Please try a different image.", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Log.e("ImageError", "Error in image selection", e)
+                Toast.makeText(this, "Error selecting image: ${e.message}", Toast.LENGTH_SHORT).show()
             }
-            // Display the file name
-            fileNameText.text = "File Name: $fileName"
-            fileNameText.visibility = View.VISIBLE
+        }
+    }
+
+    // Background task for image prediction to avoid ANR
+    private inner class ImagePredictionTask : AsyncTask<Bitmap, Void, ByteArray>() {
+        override fun onPreExecute() {
+            loadingIndicator.visibility = View.VISIBLE
+        }
+
+        override fun doInBackground(vararg params: Bitmap): ByteArray? {
+            try {
+                val bitmap = params[0]
+                val stream = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream)
+                return stream.toByteArray()
+            } catch (e: Exception) {
+                Log.e("AsyncError", "Error processing image", e)
+                return null
+            }
+        }
+
+        override fun onPostExecute(byteArray: ByteArray?) {
+            if (byteArray == null) {
+                loadingIndicator.visibility = View.GONE
+                Toast.makeText(this@MainActivity, "Error preparing image data", Toast.LENGTH_LONG).show()
+                return
+            }
+
+            Log.d("PredictFlow", "Image prepared, sending to API")
+
+            try {
+                // Create multipart form data
+                val requestFile = byteArray.toRequestBody("image/jpeg".toMediaTypeOrNull())
+                val body = MultipartBody.Part.createFormData("file", "image.jpg", requestFile)
+
+                // Call API
+                apiService.predict(body).enqueue(object : Callback<PredictionResponse> {
+                    override fun onResponse(call: Call<PredictionResponse>, response: Response<PredictionResponse>) {
+                        runOnUiThread {
+                            try {
+                                loadingIndicator.visibility = View.GONE
+
+                                if (response.isSuccessful) {
+                                    val prediction = response.body()
+                                    if (prediction != null) {
+                                        updateUIWithPrediction(prediction)
+                                    } else {
+                                        Toast.makeText(this@MainActivity, "Empty response from server", Toast.LENGTH_LONG).show()
+                                    }
+                                } else {
+                                    Toast.makeText(this@MainActivity, "Error: ${response.message() ?: "Unknown error"}", Toast.LENGTH_LONG).show()
+                                    Log.e("APIError", "Response unsuccessful: ${response.code()} - ${response.message()}")
+                                }
+                            } catch (e: Exception) {
+                                Log.e("ResponseError", "Error processing response", e)
+                                Toast.makeText(this@MainActivity, "Error processing response: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+
+                    override fun onFailure(call: Call<PredictionResponse>, t: Throwable) {
+                        runOnUiThread {
+                            loadingIndicator.visibility = View.GONE
+                            Log.e("PredictionError", "API call failed", t)
+                            Toast.makeText(this@MainActivity, "Network error: ${t.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                })
+            } catch (e: Exception) {
+                loadingIndicator.visibility = View.GONE
+                Log.e("PredictionError", "Error preparing request", e)
+                Toast.makeText(this@MainActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun updateUIWithPrediction(prediction: PredictionResponse) {
+        try {
+            // Safely handle indexes
+            val drIndex = drDiagnosisList.indexOfFirst { it.severity == prediction.retinopathy }
+            val meIndex = meDiagnosisList.indexOfFirst { it.status == prediction.edema }
+
+            // Use safe indexes
+            val validDrIndex = if (drIndex >= 0 && drIndex < prediction.retinopathy_probs.size) drIndex else 0
+            val validMeIndex = if (meIndex >= 0 && meIndex < prediction.edema_probs.size) meIndex else 0
+
+            // Update UI with predictions
+            DRPrediction.text = "Diabetic Retinopathy: ${prediction.retinopathy} (Probability: ${"%.2f".format(prediction.retinopathy_probs[validDrIndex] * 100)}%)"
+            MEPrediction.text = "Diabetic Macula Edema: ${prediction.edema} (Probability: ${"%.2f".format(prediction.edema_probs[validMeIndex] * 100)}%)"
+
+            // Update diagnosis details with null safety
+            val drDiagnosisDetail = drDiagnosisList.find { it.severity == prediction.retinopathy }?.symptoms ?: "Unknown severity level"
+            drDiagnosis.text = "•Diagnosis: $drDiagnosisDetail"
+
+            val meDiagnosisDetail = meDiagnosisList.find { it.status == prediction.edema }?.features ?: "Unknown status"
+            meDiagnosis.text = "•Diagnosis: $meDiagnosisDetail"
+
+            disclaimerText.visibility = View.VISIBLE
+        } catch (e: Exception) {
+            Log.e("UpdateUIError", "Error updating UI with prediction", e)
+            Toast.makeText(this, "Error displaying results: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clean up bitmap to prevent memory leaks
+        if (currentBitmap != null && !currentBitmap!!.isRecycled) {
+            currentBitmap!!.recycle()
+            currentBitmap = null
         }
     }
 }
-
