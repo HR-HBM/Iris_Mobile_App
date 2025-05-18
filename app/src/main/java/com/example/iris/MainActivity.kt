@@ -393,7 +393,12 @@ class MainActivity : AppCompatActivity() {
             if (prediction.retinopathy == "ICDR level 0") {
                 notes.visibility = View.GONE
                 notesCard.visibility = View.GONE
-            } else {
+            } else if (prediction.retinopathy == "ICDR level 1" || prediction.retinopathy == "ICDR level 2" || prediction.retinopathy == "ICDR level 3") {
+                notes.text = "• NPDR: Non-Proliferative Diabetic Retinopathy"
+                notes.visibility = View.VISIBLE
+                notesCard.visibility = View.VISIBLE
+            } else if (prediction.retinopathy == "ICDR level 4") {
+                notes.text = "• PDR: Proliferative Diabetic Retinopathy"
                 notes.visibility = View.VISIBLE
                 notesCard.visibility = View.VISIBLE
             }
