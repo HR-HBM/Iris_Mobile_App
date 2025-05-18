@@ -1,7 +1,10 @@
 package com.example.iris
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.AsyncTask
 import android.os.Bundle
@@ -11,6 +14,7 @@ import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.cardview.widget.CardView
 import androidx.core.content.FileProvider
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -43,17 +47,17 @@ data class MEDiagnosis(
 
 // Define DR diagnosis list
 val drDiagnosisList = listOf(
-    DRDiagnosis(severity = "ICDR level 0", symptoms = "No diabetic retinopathy: No visible abnormalities in the retina."),
-    DRDiagnosis(severity = "ICDR level 1", symptoms = "Mild NPDR: Few microaneurysms visible in the retina."),
-    DRDiagnosis(severity = "ICDR level 2", symptoms = "Moderate NPDR: Increased microaneurysms, hemorrhages, and exudates; possible venous beading."),
-    DRDiagnosis(severity = "ICDR level 3", symptoms = "Severe NPDR: Extensive hemorrhages, microaneurysms, and venous beading in multiple quadrants."),
-    DRDiagnosis(severity = "ICDR level 4", symptoms = "PDR: Neovascularization and/or vitreous hemorrhage; severe retinal damage.")
+    DRDiagnosis(severity = "ICDR level 0", symptoms = "No diabetic retinopathy - No visible abnormalities in the retina."),
+    DRDiagnosis(severity = "ICDR level 1", symptoms = "Mild NPDR - Few microaneurysms visible in the retina."),
+    DRDiagnosis(severity = "ICDR level 2", symptoms = "Moderate NPDR - Increased microaneurysms, hemorrhages, and exudates; possible venous beading."),
+    DRDiagnosis(severity = "ICDR level 3", symptoms = "Severe NPDR - Extensive hemorrhages, microaneurysms, and venous beading in multiple quadrants."),
+    DRDiagnosis(severity = "ICDR level 4", symptoms = "PDR - Neovascularization and/or vitreous hemorrhage; severe retinal damage.")
 )
 
 // Define ME diagnosis list
 val meDiagnosisList = listOf(
-    MEDiagnosis(status = "DME Negative", features = "No hard exudates or swelling in the macula region."),
-    MEDiagnosis(status = "DME Positive", features = "Hard exudates and/or macular edema present near the macula.")
+    MEDiagnosis(status = "Negative", features = "No hard exudates or swelling in the macula region."),
+    MEDiagnosis(status = "Positive", features = "Hard exudates and/or macular edema present near the macula.")
 )
 
 class MainActivity : AppCompatActivity() {
@@ -67,12 +71,28 @@ class MainActivity : AppCompatActivity() {
     lateinit var disclaimerText: TextView
     lateinit var drDiagnosis: TextView
     lateinit var meDiagnosis: TextView
+    lateinit var notes: TextView
     lateinit var fileNameText: TextView
     lateinit var loadingIndicator: ProgressBar
+    lateinit var mainScrollView: ScrollView
+    lateinit var notesCard: CardView
 
     private lateinit var currentPhotoPath: String
     private var photoURI: Uri? = null
     private var currentBitmap: Bitmap? = null
+
+    private fun isNetworkConnected(): Boolean {
+        //1
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        //2
+        val activeNetwork = connectivityManager.activeNetwork
+        //3
+        val networkCapabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+        //4
+        return networkCapabilities != null &&
+                networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
 
     // Retrofit setup with increased timeouts
     private val client = OkHttpClient.Builder()
@@ -92,7 +112,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = android.graphics.Color.parseColor("#40a6a6") // Set status bar color
+        window.statusBarColor = android.graphics.Color.parseColor("#206493") // Set status bar color
         setContentView(R.layout.activity_main)
 
         // Initialize UI components
@@ -114,6 +134,11 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
+            if (!isNetworkConnected()) {
+                Toast.makeText(this, "No internet connection. Please check your network.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+
             // Start image upload in background
             ImagePredictionTask().execute(currentBitmap)
         }
@@ -131,6 +156,9 @@ class MainActivity : AppCompatActivity() {
         meDiagnosis = findViewById(R.id.meDiagnosis)
         fileNameText = findViewById(R.id.fileNameText)
         loadingIndicator = findViewById((R.id.loadingIndicator))
+        notes = findViewById(R.id.notes)
+        mainScrollView = findViewById(R.id.mainScrollView)
+        notesCard = findViewById(R.id.notesCard)
 
         Log.d("ButtonSetup", "Predict button initialized: ${predictBtn != null}")
     }
@@ -148,6 +176,9 @@ class MainActivity : AppCompatActivity() {
         MEPrediction.text = "Diabetic Macula Edema: "
         drDiagnosis.text = "•Diagnosis: "
         meDiagnosis.text = "•Diagnosis: "
+        notes.visibility = View.GONE
+        notesCard.visibility = View.GONE
+        disclaimerText.visibility = View.INVISIBLE
     }
 
     private fun openImagePicker() {
@@ -344,26 +375,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUIWithPrediction(prediction: PredictionResponse) {
         try {
-            // Safely handle indexes
-            val drIndex = drDiagnosisList.indexOfFirst { it.severity == prediction.retinopathy }
-            val meIndex = meDiagnosisList.indexOfFirst { it.status == prediction.edema }
-
-            // Use safe indexes
-            val validDrIndex = if (drIndex >= 0 && drIndex < prediction.retinopathy_probs.size) drIndex else 0
-            val validMeIndex = if (meIndex >= 0 && meIndex < prediction.edema_probs.size) meIndex else 0
-
             // Update UI with predictions
-            DRPrediction.text = "Diabetic Retinopathy: ${prediction.retinopathy} (Probability: ${"%.2f".format(prediction.retinopathy_probs[validDrIndex] * 100)}%)"
-            MEPrediction.text = "Diabetic Macula Edema: ${prediction.edema} (Probability: ${"%.2f".format(prediction.edema_probs[validMeIndex] * 100)}%)"
+            DRPrediction.text = "Diabetic Retinopathy: ${prediction.retinopathy}"
+            MEPrediction.text = "Diabetic Macula Edema: ${prediction.edema}"
 
             // Update diagnosis details with null safety
             val drDiagnosisDetail = drDiagnosisList.find { it.severity == prediction.retinopathy }?.symptoms ?: "Unknown severity level"
-            drDiagnosis.text = "•Diagnosis: $drDiagnosisDetail"
+            drDiagnosis.text = "Diagnosis: $drDiagnosisDetail"
+            drDiagnosis.visibility = View.VISIBLE
+
 
             val meDiagnosisDetail = meDiagnosisList.find { it.status == prediction.edema }?.features ?: "Unknown status"
-            meDiagnosis.text = "•Diagnosis: $meDiagnosisDetail"
+            meDiagnosis.text = "Diagnosis: $meDiagnosisDetail"
+            meDiagnosis.visibility = View.VISIBLE
+
+
+            if (prediction.retinopathy == "ICDR level 0") {
+                notes.visibility = View.GONE
+                notesCard.visibility = View.GONE
+            } else {
+                notes.visibility = View.VISIBLE
+                notesCard.visibility = View.VISIBLE
+            }
+
+
 
             disclaimerText.visibility = View.VISIBLE
+
+            mainScrollView.post {
+                mainScrollView.smoothScrollTo(0, drDiagnosis.top)
+            }
+
+
         } catch (e: Exception) {
             Log.e("UpdateUIError", "Error updating UI with prediction", e)
             Toast.makeText(this, "Error displaying results: ${e.message}", Toast.LENGTH_LONG).show()

@@ -28,7 +28,7 @@
         android:layout_height="wrap_content"
         android:text="Iris"
         android:textSize="70dp"
-        android:textColor="#538a9d"
+        android:textColor="#ffffff"
         android:textStyle="normal"
         android:fontFamily="@font/roboto"
         app:layout_constraintTop_toBottomOf="@id/SplashScreenImage"
