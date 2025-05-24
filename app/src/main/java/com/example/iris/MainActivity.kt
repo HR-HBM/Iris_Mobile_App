@@ -382,11 +382,13 @@ class MainActivity : AppCompatActivity() {
             // Update diagnosis details with null safety
             val drDiagnosisDetail = drDiagnosisList.find { it.severity == prediction.retinopathy }?.symptoms ?: "Unknown severity level"
             drDiagnosis.text = "Diagnosis: $drDiagnosisDetail"
+            DRPrediction.visibility = View.VISIBLE
             drDiagnosis.visibility = View.VISIBLE
 
 
             val meDiagnosisDetail = meDiagnosisList.find { it.status == prediction.edema }?.features ?: "Unknown status"
             meDiagnosis.text = "Diagnosis: $meDiagnosisDetail"
+            MEPrediction.visibility = View.VISIBLE
             meDiagnosis.visibility = View.VISIBLE
 
 
